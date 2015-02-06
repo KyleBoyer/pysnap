@@ -25,8 +25,8 @@ from pysnap import get_file_extension, Snapchat
 
 
 def process_snap(s, snap, path, quiet=False):
-    filename = '{0}_{1}.{2}'.format(snap['sender'], snap['id'],
-                                    get_file_extension(snap['media_type']))
+    filename = '{0}_{1}.{2}'.format(snap['sn'], snap['id'],
+                                    get_file_extension(snap['m']))
     abspath = os.path.abspath(os.path.join(path, filename))
     if os.path.isfile(abspath):
         return
@@ -40,7 +40,7 @@ def process_snap(s, snap, path, quiet=False):
 
     if is_zipfile(abspath):
         zipped_snap = ZipFile(abspath)
-        unzip_dir = os.path.join(path, '{0}_{1}'.format(snap['sender'],
+        unzip_dir = os.path.join(path, '{0}_{1}'.format(snap['sn'],
                                                         snap['id']))
         zipped_snap.extractall(unzip_dir)
         if not quiet:
@@ -62,7 +62,7 @@ def main():
         sys.exit(1)
 
     s = Snapchat()
-    if not s.login(username, password).get('logged'):
+    if not s.login(username, password)['updates_response'].get('logged'):
         print('Invalid username or password')
         sys.exit(1)
 
