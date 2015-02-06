@@ -12,7 +12,7 @@ from uuid import uuid4
 import requests
 from Crypto.Cipher import AES
 
-URL = 'https://feelinsonice-hrd.appspot.com/bq/'
+URL = 'https://feelinsonice-hrd.appspot.com/'
 
 SECRET = b'iEk21fuwZApXlz93750dmW22pw389dPwOk'
 STATIC_TOKEN = 'm198sOkJEn37DjqZ32lpRu76xmw288xSQ9'
@@ -70,7 +70,7 @@ def request(endpoint, auth_token, data=None, files=None,
     if data is None:
         data = {}
     headers = {
-        'User-Agent': 'Snapchat/8.1.1 (iPhone5,1; iOS 6.1.4; gzip)',
+        'User-Agent': 'Snapchat/8.1.1 Beta (Nexus 4; Android 17; gzip)',
         'Accept-Language': 'en-US;q=1, en;q=0.9',
         'Accept-Locale': 'en'
     }
