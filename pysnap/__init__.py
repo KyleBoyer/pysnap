@@ -18,6 +18,10 @@ PRIVACY_EVERYONE = 0
 PRIVACY_FRIENDS = 1
 
 
+def getKey(item):
+    return item['sts']
+
+
 def is_video(data):
     return len(data) > 1 and data[0:2] == b'\x00\x00'
 
@@ -46,18 +50,17 @@ def get_media_type(data):
     return None
 
 
-def _map_keys(snap):
+def _map_keys(snaps):
     return {
-        u'id': snap.get('id', None),
-        u'media_id': snap.get('c_id', None),
-        u'media_type': snap.get('m', None),
-        u'time': snap.get('t', None),
-        u'sender': snap.get('sn', None),
-        u'recipient': snap.get('rp', None),
-        u'status': snap.get('st', None),
-        u'screenshot_count': snap.get('c', None),
-        u'sent': snap.get('sts', None),
-        u'opened': snap.get('ts', None)
+        u'id': snaps.get('id', None),
+        u'm': snaps.get('m', None),
+        u'sn': snaps.get('sn', None),
+        u'rp': snaps.get('rp', None),
+        u'st': snaps.get('st', None),
+        u'sts': snaps.get('sts', None),
+        u't': snaps.get('t', None),
+        u'timer': snaps.get('timer', None),
+        u'ts': snaps.get('ts', None)
     }
 
 
@@ -76,6 +79,27 @@ class Snapchat(object):
     def __init__(self):
         self.username = None
         self.auth_token = None
+        self.qr_path = None
+
+    def auth_token_login(self, username, auth_token):
+        """Login to Snapchat account with exsisting auth_token
+        Returns a dict containing user information on successful login, the
+        data returned is the same as get_updates.
+        :param username Snapchat username
+        :param password Snapchat password
+        """
+        self.auth_token = auth_token
+        r = self._request('loq/all_updates', {
+            'username': username,
+            'timestamp': time() * 1000
+        })
+        result = r.json()
+        if 'auth_token' in result['updates_response']:
+            self.auth_token = result['updates_response']['auth_token']
+            self.qr_path = result['updates_response']['qr_path']
+        if 'username' in result['updates_response']:
+            self.username = username.lower()
+        return result
 
     def _request(self, endpoint, data=None, files=None,
                  raise_for_status=True, req_type='post'):
@@ -95,66 +119,64 @@ class Snapchat(object):
         :param password Snapchat password
         """
         self._unset_auth()
-        r = self._request('login', {
-            'username': username,
-            'password': password
+        r = self._request('loq/login', {
+            'username': username.lower(),
+            'password': password,
+            'timestamp': time() * 1000,
+            'features_map': "[all_updates_friends_response]=1"
         })
         result = r.json()
-        if 'auth_token' in result:
-            self.auth_token = result['auth_token']
-        if 'username' in result:
-            self.username = username
+        if 'auth_token' in result['updates_response']:
+            self.auth_token = result['updates_response']['auth_token']
+        if 'qr_path' in result['updates_response']:
+            self.qr_path = result['updates_response']['qr_path']
+        if 'username' in result['updates_response']:
+            self.username = username.lower()
         return result
 
     def logout(self):
         """Logout of Snapchat account
         Returns true if logout was successful.
         """
-        r = self._request('logout', {'username': self.username})
+        r = self._request('ph/logout', {'username': self.username})
         return len(r.content) == 0
 
-    def get_updates(self, update_timestamp=0):
+    def get_updates(self):
         """Get user, friend and snap updates
         Returns a dict containing user, friends and snap information.
-
-        :param update_timestamp: Optional timestamp (epoch in seconds) to limit
-                                 updates
         """
-        r = self._request('updates', {
+        r = self._request('/loq/all_updates', {
             'username': self.username,
-            'update_timestamp': update_timestamp
+            'timestamp': time() * 1000
         })
         result = r.json()
-        if 'auth_token' in result:
-            self.auth_token = result['auth_token']
+        if 'auth_token' in result['updates_response']:
+            self.auth_token = result['updates_response']['auth_token']
+            self.qr_path = result['updates_response']['qr_path']
         return result
 
-    def get_snaps(self, update_timestamp=0):
+    def get_snaps(self):
         """Get snaps
         Returns a dict containing metadata for snaps
-
-        :param update_timestamp: Optional timestamp (epoch in seconds) to limit
-                                 updates
         """
-        updates = self.get_updates(update_timestamp)
-        # Filter out snaps containing c_id as these are sent snaps
-        return [_map_keys(snap) for snap in updates['snaps']
-                if 'c_id' not in snap]
+        allsnaps = []
+        updates = self.get_updates()
+        for convo in [convo for convo in updates['conversations_response']]:
+            allsnaps += [_map_keys(snaps) for snaps in
+                         convo.get('pending_received_snaps', None)]
+        return sorted(allsnaps, key=getKey)
 
-    def get_friend_stories(self, update_timestamp=0):
+    def get_friend_stories(self):
         """Get stories
         Returns a dict containing metadata for stories
-
-        :param update_timestamp: Optional timestamp (epoch in seconds) to limit
-                                 updates
         """
-        r = self._request("all_updates", {
+        r = self._request("loq/all_updates", {
             'username': self.username,
-            'update_timestamp': update_timestamp
+            'timestamp': time() * 1000
         })
         result = r.json()
-        if 'auth_token' in result:
-            self.auth_token = result['auth_token']
+        if 'auth_token' in result['updates_response']:
+            self.auth_token = result['updates_response']['auth_token']
         stories = []
         story_groups = result['stories_response']['friend_stories']
         for group in story_groups:
@@ -174,10 +196,32 @@ class Snapchat(object):
         :param story_key: Encryption key of the story
         :param story_iv: Encryption IV of the story
         """
-        r = self._request('story_blob', {'story_id': story_id},
+        r = self._request('bq/story_blob', {'story_id': story_id},
                           raise_for_status=False, req_type='get')
         data = decrypt_story(r.content, story_key.decode('base64'),
                              story_iv.decode('base64'))
+        if any((is_image(data), is_video(data), is_zip(data))):
+            return data
+        return None
+
+    def get_chat_media(self, id, chatid, key, iv):
+        """Get the image send over snapchat chat
+        Returns the decrypted image of the given snap or None if
+        data is invalid.
+
+        :param id: Snap id from chat to fetch
+        :param chatid: Conversation id that the snap id is from
+        :param key: Encryption key of the image
+        :param iv: Encyption IV of the image
+        """
+        r = self._request('bq/chat_media', {
+            'id': id,
+            'username': self.username,
+            'timestamp': time() * 1000,
+            'conversation_id': chatid
+        })
+        data = decrypt_story(r.content, key.decode('base64'),
+                             iv.decode('base64'))
         if any((is_image(data), is_video(data), is_zip(data))):
             return data
         return None
@@ -189,8 +233,10 @@ class Snapchat(object):
 
         :param snap_id: Snap id to fetch
         """
-        r = self._request('blob', {'username': self.username, 'id': snap_id},
-                          raise_for_status=False)
+        r = self._request('ph/blob', {
+            'username': self.username,
+            'id': snap_id
+            }, raise_for_status=False)
         data = decrypt(r.content)
         if any((is_image(data), is_video(data), is_zip(data))):
             return data
@@ -205,7 +251,7 @@ class Snapchat(object):
         """
         if data is None:
             data = {}
-        r = self._request('update_snaps', {
+        r = self._request('bq/update_snaps', {
             'username': self.username,
             'events': json.dumps(events),
             'json': json.dumps(data)
@@ -236,7 +282,6 @@ class Snapchat(object):
     def mark_screenshot(self, snap_id, view_duration=1):
         """Mark a snap as screenshotted
         Returns true on success.
-
         :param snap_id: Snap id to mark as viewed
         :param view_duration: Number of seconds snap was viewed
         """
@@ -257,7 +302,7 @@ class Snapchat(object):
         :param friends_only: True to allow snaps from friends only
         """
         setting = lambda f: PRIVACY_FRIENDS if f else PRIVACY_EVERYONE
-        r = self._request('settings', {
+        r = self._request('ph/settings', {
             'username': self.username,
             'action': 'updatePrivacy',
             'privacySetting': setting(friends_only)
@@ -268,13 +313,13 @@ class Snapchat(object):
         """Get friends
         Returns a list of friends.
         """
-        return self.get_updates().get('friends', [])
+        return self.get_updates()['friends_response'].get('friends', [])
 
     def get_best_friends(self):
         """Get best friends
         Returns a list of best friends.
         """
-        return self.get_updates().get('bests', [])
+        return self.get_updates()['friends_response'].get('bests', [])
 
     def add_friend(self, username):
         """Add user as friend
@@ -286,9 +331,10 @@ class Snapchat(object):
 
         :param username: Username to add as a friend
         """
-        r = self._request('friend', {
+        r = self._request('ph/friend', {
             'action': 'add',
             'friend': username,
+            'timestamp': time() * 1000,
             'username': self.username
         })
         return r.json()
@@ -299,7 +345,7 @@ class Snapchat(object):
 
         :param username: Username to remove from friends
         """
-        r = self._request('friend', {
+        r = self._request('ph/friend', {
             'action': 'delete',
             'friend': username,
             'username': self.username
@@ -312,7 +358,7 @@ class Snapchat(object):
 
         :param username: Username to block
         """
-        r = self._request('friend', {
+        r = self._request('ph/friend', {
             'action': 'block',
             'friend': username,
             'username': self.username
@@ -325,12 +371,35 @@ class Snapchat(object):
 
         :param username: Username to unblock
         """
-        r = self._request('friend', {
+        r = self._request('ph/friend', {
             'action': 'unblock',
             'friend': username,
             'username': self.username
         })
         return r.json().get('message') == '{0} was unblocked'.format(username)
+
+    def clear_feed(self):
+        """Clear the user's feed
+        Returns true if feed was successfully cleared.
+        """
+
+        r = self._request('clear', {
+            'username': self.username
+        })
+
+        return len(r.content) == 0
+
+    def clear_convo(self, id):
+        """Clears the conversation with a user
+
+        :param id: Conversation id to clear
+        """
+        r = self._request('loq/clear_conversation', {
+            'conversation_id': id,
+            'timestamp': time() * 1000,
+            'username': self.username
+        })
+        return r
 
     def get_blocked(self):
         """Find blocked users
@@ -354,7 +423,7 @@ class Snapchat(object):
             raise ValueError('Could not determine media type for given data')
 
         media_id = make_media_id(self.username)
-        r = self._request('upload', {
+        r = self._request('ph/upload', {
             'username': self.username,
             'media_id': media_id,
             'type': media_type
@@ -366,7 +435,7 @@ class Snapchat(object):
         """Send a snap. Requires a media_id returned by the upload method
         Returns true if the snap was sent successfully
         """
-        r = self._request('send', {
+        r = self._request('loq/send', {
             'username': self.username,
             'media_id': media_id,
             'recipient': recipients,
@@ -375,27 +444,62 @@ class Snapchat(object):
             })
         return len(r.content) == 0
 
-    def send_to_story(self, media_id, time=5, media_type=0):
-        """Send a snap to your story. Requires a media_id returned by the upload method
-           Returns true if the snap was sent successfully.
+    def send_to_story(self, media_id, time=5):
+        """Post a snap to your story. Requires a media_id returned by the
+        upload method.
         """
-        r = self._request('post_story', {
+        r = self._request('bq/post_story', {
             'username': self.username,
+            'timestamp': time() * 1000,
             'media_id': media_id,
             'client_id': media_id,
-            'time': time,
-            'type': media_type,
-            'zipped': '0'
+            'caption_text_display': '',
+            'zipped': '0',
+            'type': 0,
+            'time': time
             })
-        return r.json()
+        return r.content
 
-    def clear_feed(self):
-        """Clear the user's feed
-        Returns true if feed was successfully cleared.
+    def send_typing_notification(self, susername):
+        """Send the typing notification to the provided susername.
         """
+        r = self._request('bq/chat_typing', {
+            'username': self.username,
+            'recipient_usernames': '["' + susername + '"]',
+            'timestamp': time() * 1000
+            })
+        return r.content == ""
 
-        r = self._request('clear', {
-            'username': self.username
-        })
+    def retry_post_story(self, data, caption="", time=10):
+        """Post a snap to your story. Requires a data of the media
 
-        return len(r.content) == 0
+        :param data: The image/video data of the file to add to story
+        :param caption: Not rendered by the receiver, but shows when
+                        looking at my stories in the authentic app
+        :param time: The length of time to display on the story
+        """
+        media_id = make_media_id(self.username)
+        r = self._request('bq/retry_post_story', {
+            'username': self.username,
+            'timestamp': time() * 1000,
+            'media_id': media_id,
+            'client_id': media_id,
+            'caption_text_display': caption,
+            'zipped': int(is_zip(data)),
+            'type': get_media_type(data),
+            'time': time * 1000
+            }, files={'data': encrypt(data)})
+        return r.content
+
+    def get_snaptag(self):
+        """Returns the image data of the user's SnapTag
+        """
+        r = self._request('bq/snaptag_download', {
+            'username': self.username,
+            'image': self.qr_path,
+            'timestamp': time() * 1000
+            }, raise_for_status=False)
+        data = decrypt(r.content)
+        if any((is_image(data), is_video(data), is_zip(data))):
+            return data
+        return r.content
